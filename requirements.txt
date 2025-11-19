@@ -1,1 +1,8 @@
 flask~=3.1.2
+flask-sqlalchemy
+pymysql
+google-generativeai
+fpdf
+python-dotenv
+flask-login
+flask-cors
