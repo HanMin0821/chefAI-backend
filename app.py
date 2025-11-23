@@ -214,6 +214,97 @@ def export_pdf():
         mimetype='application/pdf'
     )
 
+
+@app.route('/recipe/generate', methods=['POST'])
+def recipe_generate_alias():
+    """Alias endpoint to match spec `/recipe/generate` - reuses existing logic."""
+    return generate_recipe()
+
+
+def estimate_nutrition(ingredients, servings=1):
+    """
+    Lightweight nutrition estimator for demo purposes.
+    Accepts `ingredients` as a string (comma-separated) or list.
+    Returns per-serving calories/protein/fat/carbs.
+    """
+    # Normalize to list of lowercase ingredient names
+    if isinstance(ingredients, str):
+        items = [i.strip().lower() for i in ingredients.split(',') if i.strip()]
+    elif isinstance(ingredients, list):
+        items = [str(i).strip().lower() for i in ingredients]
+    else:
+        items = []
+
+    # Very small lookup table (per typical portion) for demo
+    lookup = {
+        'chicken': {'calories': 250, 'protein': 30, 'fat': 8, 'carbs': 0},
+        'chicken breast': {'calories': 220, 'protein': 32, 'fat': 6, 'carbs': 0},
+        'broccoli': {'calories': 55, 'protein': 3.7, 'fat': 0.6, 'carbs': 11},
+        'rice': {'calories': 200, 'protein': 4.5, 'fat': 0.4, 'carbs': 44},
+        'garlic': {'calories': 5, 'protein': 0.2, 'fat': 0, 'carbs': 1},
+        'olive oil': {'calories': 120, 'protein': 0, 'fat': 14, 'carbs': 0},
+        'soy sauce': {'calories': 10, 'protein': 1, 'fat': 0, 'carbs': 1},
+        'default': {'calories': 50, 'protein': 1, 'fat': 1, 'carbs': 5}
+    }
+
+    totals = {'calories': 0, 'protein': 0, 'fat': 0, 'carbs': 0}
+    for item in items:
+        matched = False
+        for key, v in lookup.items():
+            if key != 'default' and key in item:
+                totals['calories'] += v['calories']
+                totals['protein'] += v['protein']
+                totals['fat'] += v['fat']
+                totals['carbs'] += v['carbs']
+                matched = True
+                break
+        if not matched:
+            v = lookup['default']
+            totals['calories'] += v['calories']
+            totals['protein'] += v['protein']
+            totals['fat'] += v['fat']
+            totals['carbs'] += v['carbs']
+
+    if servings and servings > 0:
+        per_serving = {
+            'calories': int(totals['calories'] / servings),
+            'protein': f"{round(totals['protein'] / servings, 1)}g",
+            'fat': f"{round(totals['fat'] / servings, 1)}g",
+            'carbs': f"{round(totals['carbs'] / servings, 1)}g",
+        }
+    else:
+        per_serving = {
+            'calories': int(totals['calories']),
+            'protein': f"{round(totals['protein'],1)}g",
+            'fat': f"{round(totals['fat'],1)}g",
+            'carbs': f"{round(totals['carbs'],1)}g",
+        }
+
+    return per_serving
+
+
+@app.route('/nutrition/calculate', methods=['POST'])
+def nutrition_calculate():
+    data = request.get_json() or {}
+    ingredients = data.get('ingredients')
+    servings = data.get('servings') or 1
+
+    # Accept a whole recipe object too
+    if not ingredients and data.get('recipe'):
+        recipe = data.get('recipe')
+        ingredients = recipe.get('ingredients', [])
+        servings = recipe.get('servings', servings)
+
+    if not ingredients:
+        return jsonify({'error': 'No ingredients provided'}), 400
+
+    try:
+        nutrition = estimate_nutrition(ingredients, servings=servings)
+        return jsonify({'nutrition': nutrition, 'servings': servings})
+    except Exception as e:
+        print(f"Nutrition calc error: {e}")
+        return jsonify({'error': 'Nutrition calculation failed.'}), 500
+
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
