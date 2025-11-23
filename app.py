@@ -10,7 +10,18 @@ from fpdf import FPDF
 
 app = Flask(__name__)
 app.config.from_object(Config)
-CORS(app, supports_credentials=True)
+
+CORS(app, resources={
+    r"/*": {
+        "origins": ["http://localhost:5173", "http://127.0.0.1:5173"],
+        "methods": ["GET", "POST", "OPTIONS"],  
+        "allow_headers": ["Content-Type", "Authorization"]
+    }
+}, supports_credentials=True)
+
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax' 
+app.config['SESSION_COOKIE_SECURE'] = False
+
 
 db.init_app(app)
 login_manager = LoginManager(app)
@@ -72,8 +83,19 @@ def logout():
 @app.route('/api/check_session', methods=['GET'])
 def check_session():
     if current_user.is_authenticated:
-        return jsonify({'logged_in': True, 'user_id': current_user.id, 'username': current_user.username})
-    return jsonify({'logged_in': False})
+        response = jsonify({
+            'logged_in': True, 
+            'user_id': current_user.id, 
+            'username': current_user.username
+        })
+    else:
+        response = jsonify({'logged_in': False})
+
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    
+    return response
 
 @app.route('/api/generate_recipe', methods=['POST'])
 def generate_recipe():
@@ -141,8 +163,10 @@ def generate_recipe():
         return jsonify(recipe_data)
         
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         print(f"Error generating recipe: {e}")
-        return jsonify({'error': 'Recipe generation failed. Try again later.'}), 500
+        return jsonify({'error': f'Recipe generation failed: {str(e)}'}), 500
 
 @app.route('/api/history', methods=['GET'])
 @login_required
