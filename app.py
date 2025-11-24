@@ -11,7 +11,15 @@ from fpdf import FPDF
 app = Flask(__name__)
 app.config.from_object(Config)
 
-CORS(app, supports_credentials=True)
+CORS(app,
+     origins=[
+         "http://localhost:5173",
+         "http://127.0.0.1:5173"
+     ],
+     supports_credentials=True,
+     allow_headers=["Content-Type", "Authorization"],
+     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+)
 
 db.init_app(app)
 
@@ -82,25 +90,35 @@ def generate_recipe(current_user):
     if not ingredients:
         return ApiResponse.error("Please enter at least one ingredient")
 
-    if not app.config.get("GEMINI_API_KEY"):
+    # todo need to fix gemini AI problem
+    # if not app.config.get("GEMINI_API_KEY"):
+    if app.config.get("GEMINI_API_KEY"):
         result = {
             "title": "Mock Chicken Stir Fry",
             "ingredients": ["chicken", "broccoli", "soy sauce"],
             "missing_ingredients": ["sesame oil", "garlic"],
-            "steps": ["1. Cut chicken.", "2. Stir fry with veggies.", "3. Serve."],
+            "steps": ["Cut chicken.", "Stir fry with veggies.", "Serve."],
             "nutrition": { "calories": 450, "protein": "35g", "fat": "12g", "carbs": "10g" },
             "time": "25 mins",
             "difficulty": "Easy",
             "servings": 2
         }
+        ingredients = result["ingredients"]
+        missing = result.get("missing_ingredients", [])
+
+        # merge
+        full_ingredients = list({*ingredients, *missing})
 
         recipe = Recipe(
             user_id=current_user.id,
             title=result["title"],
-            ingredients=json.dumps(result["ingredients"]),
-            missing_ingredients=json.dumps(result["missing_ingredients"]),
+            ingredients=json.dumps(full_ingredients),
+            # missing_ingredients=json.dumps(result["missing_ingredients"]),
             steps=json.dumps(result["steps"]),
-            nutrition=json.dumps(result["nutrition"])
+            nutrition=json.dumps(result.get("nutrition", {})),
+            time=result.get("time"),
+            difficulty=result.get("difficulty"),
+            servings=result.get("servings")
         )
         db.session.add(recipe)
         db.session.commit()
@@ -120,13 +138,21 @@ def generate_recipe(current_user):
 
         result = json.loads(text)
 
+        ingredients = result["ingredients"]
+        missing = result.get("missing_ingredients", [])
+
+        # merge
+        full_ingredients = list({*ingredients, *missing})
         recipe = Recipe(
             user_id=current_user.id,
             title=result["title"],
-            ingredients=json.dumps(result["ingredients"]),
-            missing_ingredients=json.dumps(result.get("missing_ingredients", [])),
+            ingredients=json.dumps(full_ingredients),
+            # no need for missing
             steps=json.dumps(result["steps"]),
-            nutrition=json.dumps(result.get("nutrition", {}))
+            nutrition=json.dumps(result.get("nutrition", {})),
+            time=result.get("time"),
+            difficulty=result.get("difficulty"),
+            servings=result.get("servings")
         )
         db.session.add(recipe)
         db.session.commit()
@@ -144,52 +170,75 @@ def history(current_user):
     history_data = []
     for r in recipes:
         history_data.append({
-            'id': r.id,
-            'title': r.title,
-            'ingredients': json.loads(r.ingredients),
-            'nutrition': json.loads(r.nutrition) if r.nutrition else {},
-            'created_at': r.created_at.isoformat()
+            "id": r.id,
+            "title": r.title,
+            "ingredients": json.loads(r.ingredients),  # full merged list
+            "steps": json.loads(r.steps),
+            "nutrition": json.loads(r.nutrition) if r.nutrition else {},
+            "time": r.time,
+            "difficulty": r.difficulty,
+            "servings": r.servings,
+            "created_at": r.created_at.isoformat()
         })
 
-    return ApiResponse.success(data=data, message="History loaded")
+    return ApiResponse.success(data=history_data, message="History loaded")
 
 
 @app.route('/api/export_pdf', methods=['POST'])
 def export_pdf():
     data = request.get_json()
-    title = data.get("title", "Recipe")
-    ingredients = data.get("ingredients", [])
-    steps = data.get("steps", [])
-    nutrition = data.get("nutrition", {})
+    title = data.get('title', 'Recipe')
+    ingredients = data.get('ingredients', [])
+    steps = data.get('steps', [])
+    nutrition = data.get('nutrition', {})
 
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
 
-    pdf.cell(200, 10, txt=title, ln=1, align="C")
+    pdf.cell(200, 10, txt=title, ln=1, align='C')
     pdf.ln(10)
 
     pdf.cell(200, 10, txt="Ingredients:", ln=1)
-    for item in ingredients:
-        pdf.cell(200, 10, txt=f"- {item}", ln=1)
-
+    for ing in ingredients:
+        pdf.cell(200, 10, txt=f"- {ing}", ln=1)
     pdf.ln(5)
+
     pdf.cell(200, 10, txt="Steps:", ln=1)
     for step in steps:
-        pdf.multi_cell(0, 10, txt=step)
+        pdf.multi_cell(0, 10, txt=f"{step}")
+    pdf.ln(5)
 
     if nutrition:
-        pdf.ln(5)
         pdf.cell(200, 10, txt="Nutrition:", ln=1)
-        pdf.multi_cell(0, 10, txt=str(nutrition))
+        nutrition_text = ", ".join([f"{k}: {v}" for k, v in nutrition.items()])
+        pdf.multi_cell(0, 10, txt=nutrition_text)
 
-    buf = io.BytesIO()
-    output = pdf.output(dest="S")
-    output_bytes = output.encode("latin-1") if isinstance(output, str) else output
-    buf.write(output_bytes)
-    buf.seek(0)
+    # Output to memory
+    pdf_output = io.BytesIO()
+    try:
+        pdf_string = pdf.output(dest='S')
+        if isinstance(pdf_string, str):
+             pdf_bytes = pdf_string.encode('latin-1')
+        else:
+             pdf_bytes = pdf_string
+    except TypeError:
+        # Newer FPDF versions might act differently or take no dest arg to return bytes directly?
+        # If dest='S' fails, try output() without args if it returns bytes,
+        # but fpdf 1.7.2 (installed) uses dest='S' to return string.
+        # Let's stick to the string encoding which is standard for fpdf 1.7.
+        pdf_bytes = pdf.output(dest='S').encode('latin-1')
 
-    return send_file(buf, as_attachment=True, download_name="recipe.pdf", mimetype="application/pdf")
+    pdf_output.write(pdf_bytes)
+    pdf_output.seek(0)
+
+    return send_file(
+        pdf_output,
+        as_attachment=True,
+        download_name='recipe.pdf',
+        mimetype='application/pdf'
+    )
+
 
 def estimate_nutrition(ingredients, servings=1):
     if isinstance(ingredients, str):
