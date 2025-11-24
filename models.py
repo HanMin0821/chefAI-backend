@@ -13,7 +13,11 @@ class User(UserMixin, db.Model):
 
     def set_password(self, password):
         from werkzeug.security import generate_password_hash
-        self.password_hash = generate_password_hash(password)
+        # Use a PBKDF2 variant that's broadly supported (avoid scrypt)
+        # Some Python/OpenSSL builds (e.g. LibreSSL on macOS) do not
+        # expose hashlib.scrypt, which newer werkzeug may try to use.
+        # Explicitly request pbkdf2:sha256 for compatibility.
+        self.password_hash = generate_password_hash(password, method='pbkdf2:sha256')
 
     def check_password(self, password):
         from werkzeug.security import check_password_hash

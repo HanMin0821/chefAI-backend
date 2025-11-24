@@ -332,4 +332,7 @@ def nutrition_calculate():
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-    app.run(debug=True)
+    # Bind to IPv4 loopback and use port 5001 to avoid macOS system services
+    # that may already be using port 5000 (AirPlay/AirTunes). Use 127.0.0.1
+    # so local requests from the browser using 127.0.0.1 reach the Flask app.
+    app.run(host='127.0.0.1', port=5001, debug=True)
