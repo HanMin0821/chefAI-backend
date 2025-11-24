@@ -11,15 +11,14 @@ from fpdf import FPDF
 app = Flask(__name__)
 app.config.from_object(Config)
 
-CORS(app,
-     origins=[
-         "http://localhost:5173",
-         "http://127.0.0.1:5173"
-     ],
-     supports_credentials=True,
-     allow_headers=["Content-Type", "Authorization"],
-     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"]
-)
+CORS(app, resources={
+    r"/*": {
+        "origins": ["http://localhost:5173", "http://127.0.0.1:5173"],
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"]
+    }
+}, supports_credentials=True)
+
 
 db.init_app(app)
 
@@ -91,8 +90,8 @@ def generate_recipe(current_user):
         return ApiResponse.error("Please enter at least one ingredient")
 
     # todo need to fix gemini AI problem
-    # if not app.config.get("GEMINI_API_KEY"):
-    if app.config.get("GEMINI_API_KEY"):
+    if not app.config.get("GEMINI_API_KEY"):
+    # if app.config.get("GEMINI_API_KEY"):
         result = {
             "title": "Mock Chicken Stir Fry",
             "ingredients": ["chicken", "broccoli", "soy sauce"],
