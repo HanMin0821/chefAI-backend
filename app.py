@@ -1,8 +1,8 @@
-from flask import Flask, request, jsonify, session, send_file
+from flask import Flask, request, send_file
 from flask_cors import CORS
-from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from config import Config
 from models import db, User, Recipe
+from utils import ApiResponse, generate_token, token_required
 import google.generativeai as genai
 import json
 import io
@@ -11,35 +11,22 @@ from fpdf import FPDF
 app = Flask(__name__)
 app.config.from_object(Config)
 
-CORS(app, resources={
-    r"/*": {
-        "origins": ["http://localhost:5173", "http://127.0.0.1:5173"],
-        "methods": ["GET", "POST", "OPTIONS"],  
-        "allow_headers": ["Content-Type", "Authorization"]
-    }
-}, supports_credentials=True)
-
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax' 
-app.config['SESSION_COOKIE_SECURE'] = False
-
+CORS(app, supports_credentials=True)
 
 db.init_app(app)
-login_manager = LoginManager(app)
-login_manager.login_view = 'login'
 
 # Configure Gemini
 if app.config['GEMINI_API_KEY']:
     genai.configure(api_key=app.config['GEMINI_API_KEY'])
 
-@login_manager.user_loader
-def load_user(user_id):
-    return User.query.get(int(user_id))
 
-@app.route('/')
-def hello_world():
-    return 'ChefAI Backend is Running!'
+@app.route("/")
+def index():
+    print("Loaded GEMINI_API_KEY =", app.config["GEMINI_API_KEY"])
+    return ApiResponse.success(message="ChefAI Backend is Running")
 
-@app.route('/api/signup', methods=['POST'])
+
+@app.route("/api/signup", methods=["POST"])
 def signup():
     data = request.get_json()
     username = data.get('username')
@@ -47,19 +34,25 @@ def signup():
     password = data.get('password')
 
     if not username or not email or not password:
-        return jsonify({'error': 'Missing required fields'}), 400
+        return ApiResponse.error("Missing required fields")
 
     if User.query.filter_by(username=username).first():
-        return jsonify({'error': 'Username already exists'}), 400
+        return ApiResponse.error("Username already exists")
+
     if User.query.filter_by(email=email).first():
-        return jsonify({'error': 'Email already exists'}), 400
+        return ApiResponse.error("Email already exists")
 
     user = User(username=username, email=email)
     user.set_password(password)
     db.session.add(user)
     db.session.commit()
 
-    return jsonify({'message': 'User created successfully'}), 201
+    token = generate_token(user.id)
+
+    return ApiResponse.success(
+        data={"token": token, "user": {"id": user.id, "username": user.username}},
+        message="User created successfully"
+    )
 
 @app.route('/api/login', methods=['POST'])
 def login():
@@ -68,46 +61,29 @@ def login():
     password = data.get('password')
 
     user = User.query.filter_by(username=username).first()
-    if user and user.check_password(password):
-        login_user(user)
-        return jsonify({'message': 'Login successful', 'user_id': user.id, 'username': user.username})
-    
-    return jsonify({'error': 'Invalid username or password'}), 401
 
-@app.route('/api/logout', methods=['POST'])
-@login_required
-def logout():
-    logout_user()
-    return jsonify({'message': 'Logged out successfully'})
+    if not user or not user.check_password(password):
+        return ApiResponse.error("Invalid username or password", status_code=401)
 
-@app.route('/api/check_session', methods=['GET'])
-def check_session():
-    if current_user.is_authenticated:
-        response = jsonify({
-            'logged_in': True, 
-            'user_id': current_user.id, 
-            'username': current_user.username
-        })
-    else:
-        response = jsonify({'logged_in': False})
+    token = generate_token(user.id)
 
-    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-    response.headers["Pragma"] = "no-cache"
-    response.headers["Expires"] = "0"
-    
-    return response
+    return ApiResponse.success(
+        data={"token": token, "user": {"id": user.id, "username": user.username}},
+        message="Login successful"
+    )
+
 
 @app.route('/api/generate_recipe', methods=['POST'])
-def generate_recipe():
+@token_required
+def generate_recipe(current_user):
     data = request.get_json()
     ingredients = data.get('ingredients')
     
     if not ingredients:
-        return jsonify({'error': 'Please enter at least one ingredient.'}), 400
-        
-    if not app.config['GEMINI_API_KEY']:
-        # Mock response for development without API Key
-        mock_response = {
+        return ApiResponse.error("Please enter at least one ingredient")
+
+    if not app.config.get("GEMINI_API_KEY"):
+        result = {
             "title": "Mock Chicken Stir Fry",
             "ingredients": ["chicken", "broccoli", "soy sauce"],
             "missing_ingredients": ["sesame oil", "garlic"],
@@ -117,60 +93,53 @@ def generate_recipe():
             "difficulty": "Easy",
             "servings": 2
         }
-        return jsonify(mock_response)
+
+        recipe = Recipe(
+            user_id=current_user.id,
+            title=result["title"],
+            ingredients=json.dumps(result["ingredients"]),
+            missing_ingredients=json.dumps(result["missing_ingredients"]),
+            steps=json.dumps(result["steps"]),
+            nutrition=json.dumps(result["nutrition"])
+        )
+        db.session.add(recipe)
+        db.session.commit()
+
+        return ApiResponse.success(result, "Recipe generated")
 
     try:
-        model = genai.GenerativeModel('gemini-2.5-flash')
-        prompt = f"""
-        Create a recipe using these ingredients: {ingredients}.
-        You can assume common pantry items (salt, pepper, oil, water) are available.
-        Return ONLY a JSON object with the following structure (no markdown formatting):
-        {{
-            "title": "Recipe Name",
-            "ingredients": ["list", "of", "ingredients", "used"],
-            "missing_ingredients": ["list", "of", "missing", "essential", "ingredients"],
-            "steps": ["step 1", "step 2"],
-            "nutrition": {{ "calories": 500, "protein": "20g", "fat": "10g", "carbs": "50g" }},
-            "time": "30 mins",
-            "difficulty": "Easy/Medium/Hard",
-            "servings": 2
-        }}
-        """
-        response = model.generate_content(prompt)
-        
-        # Clean up response text to ensure valid JSON
-        text = response.text.strip()
-        if text.startswith('```json'):
-            text = text[7:]
-        if text.endswith('```'):
-            text = text[:-3]
-            
-        recipe_data = json.loads(text)
-        
-        # Save to DB if user is logged in
-        if current_user.is_authenticated:
-            recipe = Recipe(
-                user_id=current_user.id,
-                title=recipe_data['title'],
-                ingredients=json.dumps(recipe_data['ingredients']),
-                missing_ingredients=json.dumps(recipe_data.get('missing_ingredients', [])),
-                steps=json.dumps(recipe_data['steps']),
-                nutrition=json.dumps(recipe_data.get('nutrition', {})),
-            )
-            db.session.add(recipe)
-            db.session.commit()
-            
-        return jsonify(recipe_data)
-        
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        print(f"Error generating recipe: {e}")
-        return jsonify({'error': f'Recipe generation failed: {str(e)}'}), 500
+        model = genai.GenerativeModel("gemini-2.5-flash")
+        prompt = f"Create a recipe JSON using ingredients: {ingredients}"
+        resp = model.generate_content(prompt)
 
-@app.route('/api/history', methods=['GET'])
-@login_required
-def history():
+        text = resp.text.strip()
+        if text.startswith("```json"):
+            text = text[7:]
+        if text.endswith("```"):
+            text = text[:-3]
+
+        result = json.loads(text)
+
+        recipe = Recipe(
+            user_id=current_user.id,
+            title=result["title"],
+            ingredients=json.dumps(result["ingredients"]),
+            missing_ingredients=json.dumps(result.get("missing_ingredients", [])),
+            steps=json.dumps(result["steps"]),
+            nutrition=json.dumps(result.get("nutrition", {}))
+        )
+        db.session.add(recipe)
+        db.session.commit()
+
+        return ApiResponse.success(result, "Recipe generated")
+
+    except Exception as e:
+        return ApiResponse.error("Recipe generation failed", errors=str(e), status_code=500)
+
+
+@app.route("/api/history", methods=["GET"])
+@token_required
+def history(current_user):
     recipes = Recipe.query.filter_by(user_id=current_user.id).order_by(Recipe.created_at.desc()).all()
     history_data = []
     for r in recipes:
@@ -181,85 +150,55 @@ def history():
             'nutrition': json.loads(r.nutrition) if r.nutrition else {},
             'created_at': r.created_at.isoformat()
         })
-    return jsonify(history_data)
+
+    return ApiResponse.success(data=data, message="History loaded")
+
 
 @app.route('/api/export_pdf', methods=['POST'])
 def export_pdf():
     data = request.get_json()
-    title = data.get('title', 'Recipe')
-    ingredients = data.get('ingredients', [])
-    steps = data.get('steps', [])
-    nutrition = data.get('nutrition', {})
-    
+    title = data.get("title", "Recipe")
+    ingredients = data.get("ingredients", [])
+    steps = data.get("steps", [])
+    nutrition = data.get("nutrition", {})
+
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
-    
-    pdf.cell(200, 10, txt=title, ln=1, align='C')
+
+    pdf.cell(200, 10, txt=title, ln=1, align="C")
     pdf.ln(10)
-    
+
     pdf.cell(200, 10, txt="Ingredients:", ln=1)
-    for ing in ingredients:
-        pdf.cell(200, 10, txt=f"- {ing}", ln=1)
+    for item in ingredients:
+        pdf.cell(200, 10, txt=f"- {item}", ln=1)
+
     pdf.ln(5)
-        
     pdf.cell(200, 10, txt="Steps:", ln=1)
     for step in steps:
-        pdf.multi_cell(0, 10, txt=f"{step}")
-    pdf.ln(5)
-    
+        pdf.multi_cell(0, 10, txt=step)
+
     if nutrition:
+        pdf.ln(5)
         pdf.cell(200, 10, txt="Nutrition:", ln=1)
-        nutrition_text = ", ".join([f"{k}: {v}" for k, v in nutrition.items()])
-        pdf.multi_cell(0, 10, txt=nutrition_text)
-        
-    # Output to memory
-    pdf_output = io.BytesIO()
-    try:
-        pdf_string = pdf.output(dest='S')
-        if isinstance(pdf_string, str):
-             pdf_bytes = pdf_string.encode('latin-1')
-        else:
-             pdf_bytes = pdf_string
-    except TypeError:
-        # Newer FPDF versions might act differently or take no dest arg to return bytes directly?
-        # If dest='S' fails, try output() without args if it returns bytes, 
-        # but fpdf 1.7.2 (installed) uses dest='S' to return string.
-        # Let's stick to the string encoding which is standard for fpdf 1.7.
-        pdf_bytes = pdf.output(dest='S').encode('latin-1')
+        pdf.multi_cell(0, 10, txt=str(nutrition))
 
-    pdf_output.write(pdf_bytes)
-    pdf_output.seek(0)
-    
-    return send_file(
-        pdf_output,
-        as_attachment=True,
-        download_name='recipe.pdf',
-        mimetype='application/pdf'
-    )
+    buf = io.BytesIO()
+    output = pdf.output(dest="S")
+    output_bytes = output.encode("latin-1") if isinstance(output, str) else output
+    buf.write(output_bytes)
+    buf.seek(0)
 
-
-@app.route('/recipe/generate', methods=['POST'])
-def recipe_generate_alias():
-    """Alias endpoint to match spec `/recipe/generate` - reuses existing logic."""
-    return generate_recipe()
-
+    return send_file(buf, as_attachment=True, download_name="recipe.pdf", mimetype="application/pdf")
 
 def estimate_nutrition(ingredients, servings=1):
-    """
-    Lightweight nutrition estimator for demo purposes.
-    Accepts `ingredients` as a string (comma-separated) or list.
-    Returns per-serving calories/protein/fat/carbs.
-    """
-    # Normalize to list of lowercase ingredient names
     if isinstance(ingredients, str):
-        items = [i.strip().lower() for i in ingredients.split(',') if i.strip()]
+        items = [i.strip().lower() for i in ingredients.split(",") if i.strip()]
     elif isinstance(ingredients, list):
         items = [str(i).strip().lower() for i in ingredients]
     else:
         items = []
 
-    # Very small lookup table (per typical portion) for demo
     lookup = {
         'chicken': {'calories': 250, 'protein': 30, 'fat': 8, 'carbs': 0},
         'chicken breast': {'calories': 220, 'protein': 32, 'fat': 6, 'carbs': 0},
@@ -289,25 +228,14 @@ def estimate_nutrition(ingredients, servings=1):
             totals['fat'] += v['fat']
             totals['carbs'] += v['carbs']
 
-    if servings and servings > 0:
-        per_serving = {
-            'calories': int(totals['calories'] / servings),
-            'protein': f"{round(totals['protein'] / servings, 1)}g",
-            'fat': f"{round(totals['fat'] / servings, 1)}g",
-            'carbs': f"{round(totals['carbs'] / servings, 1)}g",
-        }
-    else:
-        per_serving = {
-            'calories': int(totals['calories']),
-            'protein': f"{round(totals['protein'],1)}g",
-            'fat': f"{round(totals['fat'],1)}g",
-            'carbs': f"{round(totals['carbs'],1)}g",
-        }
+    return {
+        "calories": int(totals["calories"] / servings),
+        "protein": f"{round(totals['protein'] / servings, 1)}g",
+        "fat": f"{round(totals['fat'] / servings, 1)}g",
+        "carbs": f"{round(totals['carbs'] / servings, 1)}g",
+    }
 
-    return per_serving
-
-
-@app.route('/nutrition/calculate', methods=['POST'])
+@app.route("/api/calculate_nutrition", methods=["POST"])
 def nutrition_calculate():
     data = request.get_json() or {}
     ingredients = data.get('ingredients')
@@ -320,19 +248,18 @@ def nutrition_calculate():
         servings = recipe.get('servings', servings)
 
     if not ingredients:
-        return jsonify({'error': 'No ingredients provided'}), 400
+        return ApiResponse.error("No ingredients provided")
 
     try:
-        nutrition = estimate_nutrition(ingredients, servings=servings)
-        return jsonify({'nutrition': nutrition, 'servings': servings})
+        nutrition = estimate_nutrition(ingredients, servings)
+        return ApiResponse.success(
+            data={"nutrition": nutrition, "servings": servings},
+            message="Nutrition calculated"
+        )
     except Exception as e:
-        print(f"Nutrition calc error: {e}")
-        return jsonify({'error': 'Nutrition calculation failed.'}), 500
+        return ApiResponse.error("Nutrition calculation failed", errors=str(e), status_code=500)
 
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-    # Bind to IPv4 loopback and use port 5001 to avoid macOS system services
-    # that may already be using port 5000 (AirPlay/AirTunes). Use 127.0.0.1
-    # so local requests from the browser using 127.0.0.1 reach the Flask app.
-    app.run(host='127.0.0.1', port=5001, debug=True)
+    app.run(host="127.0.0.1", port=5000, debug=True)
