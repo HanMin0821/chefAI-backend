@@ -36,7 +36,7 @@ class Recipe(db.Model):
     difficulty = db.Column(db.String(50))
     servings = db.Column(db.Integer)
 
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.now)
 
     def __repr__(self):
         return f'<Recipe {self.title}>'
