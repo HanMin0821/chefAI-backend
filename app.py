@@ -126,7 +126,21 @@ def generate_recipe(current_user):
 
     try:
         model = genai.GenerativeModel("gemini-2.5-flash")
-        prompt = f"Create a recipe JSON using ingredients: {ingredients}"
+        prompt = f"""
+        Create a recipe using these ingredients: {ingredients}.
+        You can assume common pantry items (salt, pepper, oil, water) are available.
+        Return ONLY a JSON object with the following structure (no markdown formatting):
+        {{
+            "title": "Recipe Name",
+            "ingredients": ["list", "of", "ingredients", "used"],
+            "missing_ingredients": ["list", "of", "missing", "essential", "ingredients"],
+            "steps": ["step 1", "step 2"],
+            "nutrition": {{ "calories": 500, "protein": "20g", "fat": "10g", "carbs": "50g" }},
+            "time": "30 mins",
+            "difficulty": "Easy/Medium/Hard",
+            "servings": 2
+        }}
+        """
         resp = model.generate_content(prompt)
 
         text = resp.text.strip()
@@ -283,31 +297,7 @@ def estimate_nutrition(ingredients, servings=1):
         "carbs": f"{round(totals['carbs'] / servings, 1)}g",
     }
 
-@app.route("/api/calculate_nutrition", methods=["POST"])
-def nutrition_calculate():
-    data = request.get_json() or {}
-    ingredients = data.get('ingredients')
-    servings = data.get('servings') or 1
-
-    # Accept a whole recipe object too
-    if not ingredients and data.get('recipe'):
-        recipe = data.get('recipe')
-        ingredients = recipe.get('ingredients', [])
-        servings = recipe.get('servings', servings)
-
-    if not ingredients:
-        return ApiResponse.error("No ingredients provided")
-
-    try:
-        nutrition = estimate_nutrition(ingredients, servings)
-        return ApiResponse.success(
-            data={"nutrition": nutrition, "servings": servings},
-            message="Nutrition calculated"
-        )
-    except Exception as e:
-        return ApiResponse.error("Nutrition calculation failed", errors=str(e), status_code=500)
-
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-    app.run(host="127.0.0.1", port=5000, debug=True)
+    app.run(host="localhost", port=5000, debug=True)
