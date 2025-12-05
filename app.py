@@ -89,7 +89,6 @@ def generate_recipe(current_user):
     if not ingredients:
         return ApiResponse.error("Please enter at least one ingredient")
 
-    # todo need to fix gemini AI problem
     if not app.config.get("GEMINI_API_KEY"):
     # if app.config.get("GEMINI_API_KEY"):
         result = {
@@ -128,7 +127,8 @@ def generate_recipe(current_user):
         model = genai.GenerativeModel("gemini-2.5-flash")
         prompt = f"""
         Create a recipe using these ingredients: {ingredients}.
-        You can assume common pantry items (salt, pepper, oil, water) are available.
+        missing_ingredients must ALWAYS contain at least one ingredient (even if optional). 
+        If no ingredient is truly missing, invent one that would improve flavor.
         Return ONLY a JSON object with the following structure (no markdown formatting):
         {{
             "title": "Recipe Name",
