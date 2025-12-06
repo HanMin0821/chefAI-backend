@@ -6,14 +6,17 @@ from utils import ApiResponse, generate_token, token_required
 import google.generativeai as genai
 import json
 import io
+import os
 from fpdf import FPDF
 
 app = Flask(__name__)
 app.config.from_object(Config)
 
+# CORS configuration - support both local and production
+allowed_origins = os.environ.get('ALLOWED_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173').split(',')
 CORS(app, resources={
     r"/*": {
-        "origins": ["http://localhost:5173", "http://127.0.0.1:5173"],
+        "origins": allowed_origins,
         "methods": ["GET", "POST", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"]
     }

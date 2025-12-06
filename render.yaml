@@ -1,0 +1,27 @@
+services:
+  # Backend Flask API
+  - type: web
+    name: chefai-backend
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 120 app:app
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: DATABASE_URI
+        fromDatabase:
+          name: chefai-db
+          property: connectionString
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: ALLOWED_ORIGINS
+        sync: false
+
+databases:
+  - name: chefai-db
+    databaseName: chefai
+    user: chefai_user
+    plan: free
+

@@ -6,6 +6,7 @@ fpdf~=1.7.2
 python-dotenv~=1.2.1
 flask-login~=0.6.3
 flask-cors~=6.0.1
+gunicorn~=21.2.0
 
 protobuf~=5.29.5
 PyJWT~=2.10.1
