@@ -25,6 +25,10 @@ CORS(app, resources={
 
 db.init_app(app)
 
+# Initialize database tables
+with app.app_context():
+    db.create_all()
+
 # Configure Gemini
 if app.config['GEMINI_API_KEY']:
     genai.configure(api_key=app.config['GEMINI_API_KEY'])
